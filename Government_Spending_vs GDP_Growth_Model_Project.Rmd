@@ -1,0 +1,354 @@
+---
+title: "104 Project: Government Spending as a Catalyst for GDP Growth"
+author: "Robbie Mitchell"
+date: "2026-06-02"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+# Part 1:
+## Question 1a)
+```{r}
+world_data <- read.csv("world_data4.csv")
+```
+Dataset Citation:
+World Bank. (2025). World Development Indicators. World Bank. https://databank.worldbank.org/source/world-development-indicators 
+
+With this report, we seek to identify whether Government Spending is associated with higher annual GDP growth using data from the World Bank (World Development Indicators).  The WDI provides country-level, annual macroeconomic data.  We tracked government final consumption expenditure (as a % of GDP) across N=5 countries: the USA, Brazil, South Korea, the UK, and Australia, and across T=8 years (2012-2019).  It is a balanced panel NT = 40.  We observed GDP growth (annual %) as our dependent variable and considered inflation (consumer prices annual %∆), unemployment, and national reinvestment rates (net investment in non-financial assets as a % of GDP).
+
+Panel Data is appropriate for our research question because a simple cross-sectional dataset would have only five observations, making it difficult to parse the effects of government spending on GDP growth from institutional factors or country-specific events in that given year.  A time-series dataset would ignore the country-by-country variation that can validate the spending relationship.
+
+Specifically, the heterogeneity we are concerned about stems from time-invariant, country-specific characteristics such as market efficiency, legal systems, governance, tax systems, and regulations.  These affect the deployment of fiscal policy and its effects on growth, and if we don’t control for them, our spending coefficient becomes biased.
+
+## Question 1b)
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Convert from wide to long format
+panel_long <- world_data %>%
+  pivot_longer(
+    cols = starts_with("X20"),
+    names_to = "year",
+    values_to = "value"
+  ) %>%
+  mutate(
+    year = as.numeric(gsub("X([0-9]{4}).*", "\\1", year)),
+    value = as.numeric(value)
+  )
+
+# Keep only variables used in the analysis
+panel_long <- panel_long %>%
+  filter(
+    Series.Name %in% c(
+      "GDP growth (annual %)",
+      "General government final consumption expenditure (% of GDP)",
+      "Inflation, consumer prices (annual %)",
+      "Unemployment, total (% of total labor force) (modeled ILO estimate)",
+      "Net investment in nonfinancial assets (% of GDP)"
+    )
+  )
+
+# Create a panel dataset (one row per country-year)
+panel_data <- panel_long %>%
+  select(Country.Name, year, Series.Name, value) %>%
+  pivot_wider(
+    names_from = Series.Name,
+    values_from = value
+  )
+
+# Rename variables for convenience
+panel_data <- panel_data %>%
+  rename(
+    GDP_Growth = `GDP growth (annual %)`,
+    Gov_Spending = `General government final consumption expenditure (% of GDP)`,
+    Inflation = `Inflation, consumer prices (annual %)`,
+    Unemployment = `Unemployment, total (% of total labor force) (modeled ILO estimate)`,
+    Investment = `Net investment in nonfinancial assets (% of GDP)`
+  )
+```
+
+
+### Figure 1: Histogram of GDP Growth (Pooled)
+```{r}
+# Histogram of GDP Growth (Pooled)
+ggplot(panel_data, aes(x = GDP_Growth)) +
+  geom_histogram(bins = 10) +
+  labs(
+    title = "Distribution of GDP Growth Rates",
+    x = "GDP Growth (%)",
+    y = "Frequency",
+    caption = "Figure 1. Distribution of GDP growth pooled across countries and years."
+  ) +
+  theme_minimal()
+```
+The distribution of GDP growth rate % has a left skew, centered around a median of 2.39%.  There is an outlier around -3.5%, representing a 2-year Brazil-specific downturn from an isolated shock.
+
+### Figure 2: Government Spending by Country Over Time
+```{r}
+ggplot(
+  panel_data,
+  aes(
+    x = year,
+    y = Gov_Spending,
+    group = Country.Name,
+    color = Country.Name
+  )
+) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Government Expenditure by Country",
+    x = "Year",
+    y = "Government Expenditure (% GDP)",
+    caption = "Figure 2. Government expenditure by country, 2012–2019."
+  ) +
+  theme_minimal()
+```
+Government Expenditure as a % of GDP differs considerably between nations over the 8 years.  The United States and Korea are outliers, spending 14-16% of GDP, compared to Brazil, Australia, and the UK spending 18.5-20.5%, indicating a time-invariant, US/Korea-specific effect.  There are also differences in spending trends, with the US and UK decreasing spending and Australia, Korea, and Brazil raising spending over the time frame.  
+
+
+### Figure 3: GDP Growth vs Government Spending
+```{r}
+ggplot(panel_data, aes(Gov_Spending, GDP_Growth)) +
+  geom_point(aes(color = Country.Name), size = 3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "GDP Growth and Government Expenditure",
+    x = "Government Expenditure (% GDP)",
+    y = "GDP Growth (%)",
+    color = "Country"
+  ) +
+  theme_minimal()
+```
+The pooled scatter plot reveals a weak negative relationship between government expenditure and GDP growth.  There is substantial unexplained variation around the fitted line.  The pooled relationship cannot disentangle structural differences between countries affecting growth rates. For instance, the US and Korea are highly advanced technologically.  The US has low corporate taxes and a highly efficient market supporting higher growth from a lower level of spending.  Besides two Brazilian outliers that bring down the fitted line, country data points are mostly grouped, indicating individual heterogeneity. These country-specific differences motivate the use of control variables and further use of Fixed and Random Effects.
+
+### Summary Statistics Table:
+```{r}
+library(psych)
+
+describe(
+  panel_data %>%
+    select(
+      GDP_Growth,
+      Gov_Spending,
+      Inflation,
+      Unemployment,
+      Investment
+    )
+)
+```
+GDP Growth averages 2.12%, brought down from the median of 2.37% by the outlier -3.55%.  With a 1.47 standard deviation, there is substantial variation for estimation of the spending-to-growth relationship. Spending averages 17.5%, consistent with the UK, Australia, and Brazil spending between 18.5-20.5% of GDP and the United States and Korea spending considerably lower.  Inflation and unemployment both have a wide range with variation across the sample affirming them as good control variables.  
+
+## Question 1c)
+**Dependent Variable:**
+We are trying to explain how the GDP Growth Rate (annual %) is affected by government spending after controlling for other macroeconomic variables influencing growth.  
+
+**Independent Variables:**
+Our main independent variable is general government final consumption expenditure (% of GDP), our measure of government spending.  This number refers to the share of economic activity coming from the public sector. 
+
+Our other covariates include inflation %, which reflects the change in consumer prices tethered to some base year.  A country’s inflation rate often determines their government's fiscal policy, and real growth rates and therefore it is an important variable to include.  
+We also include unemployment, which similarly influences a country’s fiscal policy as well as growth rates. 
+
+Finally, we included national reinvestment rates (net investment in non-financial assets as a % of GDP).  Private investment is important to capital accumulation and sustained long-run growth in a country, and it can also be crowded out by government spending, making it an important variable to control for in our analysis.
+
+**Hypothesized Relationships:**
+We believe the relationship between government spending and annual GDP growth rate will be positive, as spending on infrastructure, education, defense, and healthcare stimulates business and consumer demand.  
+We expect the relationship between inflation and annual GDP growth rate to be negative, as inflation erodes purchasing power, decreasing real consumer spending, and may also lead to higher interest rates, which detract from growth outcomes.
+
+We also hypothesize unemployment to be negatively correlated with GDP growth, as higher unemployment means the economy is below its full-employment output potential, and the unemployed population will also have less money to spend, therefore decreasing aggregate demand.
+
+Finally, we expect a positive relationship between investment and annual GDP growth, as investment is a component of GDP and raises the capital stock, supporting a higher level of productivity and output.
+
+**Potential Confounders:**
+Potential confounders include market efficiency, legal systems, governance, tax systems, and regulations. Additionally, political stability, geography, natural resources, and population size/demographics can all potentially confound the spending-growth relationship in an OLS regression.  These factors are country-specific, impacting growth rates and how governments apportion spending, thus leading to bias when omitted.These factors are largely time-invariant over the short (2012-2019) window, suggesting the use of panel fixed effects and random effects. Other possible confounders include time-varying shocks such as global downturns, energy shocks, and severe weather patterns, which impact each country differently and are more difficult to account for.
+
+## Question 1d)
+```{r}
+library(plm)
+library(modelsummary)
+
+# Create panel structure
+pdata <- pdata.frame(
+  panel_data,
+  index = c("Country.Name", "year")
+)
+
+# Estimate models
+pooled_model <- plm(
+  GDP_Growth ~
+    Gov_Spending +
+    Inflation +
+    Unemployment +
+    Investment,
+  data = pdata,
+  model = "pooling"
+)
+
+fe_model <- plm(
+  GDP_Growth ~
+    Gov_Spending +
+    Inflation +
+    Unemployment +
+    Investment,
+  data = pdata,
+  model = "within"
+)
+re_model <- plm(
+  GDP_Growth ~
+    Gov_Spending +
+    Inflation +
+    Unemployment +
+    Investment,
+  data = pdata,
+  model = "random",
+  random.method = "walhus"
+)
+
+# Comparative regression table
+modelsummary(
+  list(
+    "Pooled OLS" = pooled_model,
+    "Fixed Effects" = fe_model,
+    "Random Effects" = re_model
+  ),
+  stars = TRUE,
+  statistic = "std.error",
+  title = "Comparison of Pooled OLS, Fixed Effects, and Random Effects Models",
+  gof_omit = "IC|Log|Adj|F",
+  output = "kableExtra"
+)
+```
+## Question 1e)
+```{r}
+library(plm)
+library(lmtest)
+library(sandwich)
+
+# -----------------------------
+# MODEL SELECTION TESTS
+# -----------------------------
+
+# Fixed Effects vs Pooled OLS
+f_test <- pFtest(fe_model, pooled_model)
+
+# Random Effects vs Pooled OLS
+lm_test <- plmtest(
+  pooled_model,
+  type = "bp"
+)
+
+# Fixed Effects vs Random Effects
+hausman_test <- phtest(
+  fe_model,
+  re_model
+)
+
+f_test
+lm_test
+hausman_test
+
+```
+The F-test fails to reject the null hypothesis of no country-specific effects (p = 0.05994 > 0.05), which suggests that country effects should not be incorporated into the model and Pooled OLS may be considerded. Additionally, the LM test failed to reject the null hypothesis of no panel effects (p = 0.1302 > 0.05), suggesting that pooled OLS regression is prefered over random-effects. The Hausman test rejecting the null hypothesis (p = 0.04126 < 0.05), suggesting that the random-effects estimator is inconsistent. Therefore, the fixed-effects model is preferred over the random-effects estimator. However due to the F-test failing to find evidence of individual country specific effects at the 5% level, the pooled OlS model is the most appropriate choice for the data and will be used going forward.
+
+```{r}
+library(lmtest)
+library(sandwich)
+
+# -----------------------------
+# HETEROSKEDASTICITY TEST
+# -----------------------------
+hetero_test <- bptest(pooled_model)
+
+# -----------------------------
+# SERIAL CORRELATION TEST
+# -----------------------------
+serial_test <- pbgtest(pooled_model)
+
+# Display test results
+hetero_test
+serial_test
+
+# -----------------------------
+# ROBUST STANDARD ERRORS
+# -----------------------------
+coeftest(
+  pooled_model,
+  vcov = vcovHC(
+    pooled_model,
+    type = "HC1"
+  )
+)
+
+# -----------------------------
+# RESIDUAL PLOTS
+# -----------------------------
+resid_pool <- as.numeric(residuals(pooled_model))
+fit_pool <- as.numeric(fitted(pooled_model))
+
+# Residuals vs Fitted
+plot(
+  fit_pool,
+  resid_pool,
+  xlab = "Fitted Values",
+  ylab = "Residuals",
+  main = "Residuals vs Fitted Values",
+  pch = 19
+)
+abline(h = 0, lty = 2)
+
+# Histogram of Residuals
+hist(
+  resid_pool,
+  main = "Histogram of Residuals",
+  xlab = "Residuals"
+)
+```
+
+For the Breusch–Pagan test, since p = 0.0029 < 0.05, we reject the null hypothesis of constant error variance, indicating the presence of heteroskedasticity. The robust standard errors reported above should therefore be used. The Breusch–Godfrey test output a p = 0.02841 < 0.05, which suggests evidence of serial correlation in the residuals. To yield correct inferences, robust standard errors will be used.
+
+For the residual vs fitted values plot, it appears that the residuals are randomly scattered around zero with no discernable pattern which supports the use of a linear model. Based on the historgram, the residuals are symmetric with median near zero, which reinforces our normality assumption. 
+
+## Question 1f)
+Interpreting the OLS estimates with robust standard errors we can see that the government spending coefficient is -0.0497. This means that an increase of a percentage point in government final consumption expenditure relates to a decrease of about 0.05 percentage point in annual GDP growth holding other variables fixed. This weak negative (p=0.076) association contradicts our hypothesis that the relationship between government spending and annual GDP growth rate is positive. There is an important caveat that impacts this weak negative relationship that we see in the OLS model. As we saw in figure 3, the US and South Korea are the lowest spending economies with some of the highest GDP annual growth. This likely represents institutional, technological, and market differences rather than purely a difference in government spending. 
+
+Inflation experiences a coefficient of -0.577, meaning a one percentage point increase in inflation is associated with a 0.577 drop in annual GDP growth rate. This reflects our hypothesis that an increase in inflation erodes purchasing power and results in a decrease in annual GDP growth. The coefficient for unemployment at -0.133 also aligns with our hypothesis that an increase in unemployment will decrease annual GDP growth. An increase in a percentage point in unemployment decreases the annual GDP growth rate by 0.133, which we stated was because employment is running below its full employment potential and leaves the population with less money to spend resulting in a downturn in annual GDP growth. On the other hand, our hypothesis that investment would be positively correlated to annual GDP growth is incorrect according to the model. The model shows investment has a coefficient of -0.808 with marginal significance (p=.057). 
+
+We can draw a few implications from the data, with the most important being the implications regarding our research question of whether government spending is associated with higher annual GDP growth. From the data we can see there is little support for using government spending as a key determinant of annual GDP growth rate as they are weakly negatively related, although this results likely reflects different internal structures across countries rather than government spending having a direct negative effect on GDP. The implication would be that policies and decision makers should not cut government spending in order to raise annual GDP growth. Instead we can see the price stability matters more than the magnitude of government spending when it comes to annual GDP growth (unemployment does as well but has a smaller effect). Policy makers should focus more on inflation as a driver as well as businesses and investors outside of government (looking to expand to other countries for example) rather than adjusting public spending or looking for countries with a certain amount of public spending. 
+
+The panel framework helps control bias, but there are some key limits to identification that help explain why the coefficients produced might not be the real causal effect. 
+
+The first is reverse causality. In our model we assume that public spending leads to GDP growth, but this relationship may be the opposite in that growth in GDP leads to an increase in spending. Growth in an economy leads to higher tax revenues which generate a higher budget for the government to spend, and during recessions governments spend more as stimulus. This makes it difficult to decipher whether GDP growth is caused by an augmentation in spending or whether an increase in spending is caused by GDP growth, making our single coefficient in our model possibly misleading.
+
+Another threat to identification to mention is time varying omitted variables.  For example during these years the United Kingdom was greatly affected by the anticipation and uncertainty of Brexit. Although Brexit happened in 2020 (after our model), the 2016 referendum caused a big drop in the pound (UK currency) which made imports more expensive and caused a spike in inflation from 0.4% in 2016 to 3% in 2017. This uncertainty also deterred investors from putting money into the UK, leading to a decline in economic growth. Our model picks this up as a causal inflation to GDP growth relationship rather than a singular shock which puts bias on the inflation coefficient. Other examples of omitted variables are Brazil’s 2014-2016 recession due to the political crisis and a commodity collapse which moved growth, unemployment, and fiscal policy in the same direction. Australia faced a decrease in employment, investment, and GDP growth after its mining boom fell sharply starting in 2013 putting a bias on the relationship of our investment coefficient. The United States also underwent policy change with the US tax reform and trade-war tariffs with China during these years which would have also impacted investment and growth. These country specific shocks affect our regressors and growth but are not included in our model, putting bias on our coefficients and are part of the reason our estimates may display shared shocks just as much as they represent a causal effect. 
+
+Other threats to identification are measurement errors and sample size. Our data comes from the World Bank and uses data figures from different countries with different methods of accounting. This can skew estimates and weaken precision. Our model has a relatively small sample size of 5 countries over 8 years. With small amounts of data, it can be heavily influenced by a couple shocks or by a couple countries and it can be hard to reveal real effects. These threats to identification all explain why the -0.05 coefficient might not be the true causal effect of government spending on annual GDP growth. 
+
+There are several ways we could strengthen causal identification. An instrumental variable that affects government spending but doesn't directly change annual GDP growth could be used to break the reverse causality threat to identification. This could include fiscal rules or election cycles. Another method would be the Hausman Taylor model. This model treats some regressors as endogenous and others as exogenous and implements internal instruments. The Hausman Taylor model could treat government spending as endogenous and use more concrete regressors such as inflation and unemployment as internal instruments to reduce some of the bias associated with the spending coefficient. 
+
+# AI APPENDIX
+## Usage Log:
+
+Disclaimer: Chat-GPT was used as the sole AI tool throughout the project report.
+
+- For question 1b), AI was asked to output code that would convert the dataset from long to wide, and then to organize the data in panel format.
+
+- For question 1d), AI was asked to outline code to estimate each of the three model types. AI was also asked to troubleshoot a problem with an inadequate number of observations in the three model summary output. 
+
+- For question 1e), AI was asked to outline code to attain the p-values of all tests used, and the Robust standard error estimates for the pooled OLS model. AI was also asked to write code to output the residual plots.
+
+## Critical Reflection:
+ 
+  AI was correct in its output when given specific instructions, particularly in steps 1b) and 1e). When directed to give direct code output, the AI was very useful in producing clear, concise, and functional code.
+  
+  The largest issue our group faced in completing the project was the presense of missing values for Net Investment % for various previous countries we included before in our dataset. When asked about possible sources and troubleshooting steps for the issue of missing observations, the AI struggled to identify the true issue, then cited various options such as omitting the variable altogether or omitting the countries with missing values from the regression. The AI failed to see that these 'fixes' would violate the project specifications (N X T >= 40) and unbalance the panel data. Eventually, we fixed the problem manually by pulling a new dataset using countries that had not missing values.
+  
+  AI was asked to critique specifications for steps 1d) and 1e). Quoted from its response: "The F-test and LM test both fail to reject pooled OLS at the 5% significance level, suggesting there is insufficient evidence that country-specific panel effects are necessary. A limitation of the specification is the small sample size, which reduces statistical power and may explain why the F-test result is only marginally insignificant. Because the diagnostics indicate both heteroskedasticity and serial correlation, inference should rely on robust standard errors rather than the conventional standard errors reported by the model." We agree with analysis provided by the LLM, as we decided to use Robust SE's for our estimates as well. Additionally, we highlighted the sample size issue as a concern and possible fix in step 1f.
+
+
